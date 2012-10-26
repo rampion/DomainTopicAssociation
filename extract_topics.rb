@@ -49,9 +49,27 @@ STATUS_FORMAT =  "%t: [%B] (%a, %E)"
 
 # simple status display
 def status(prefix, file)
+  # This can take a while, so let the user interrupt it to just get
+  # some of the data
+  interrupted = false
+  prev = Signal.trap("INT") do
+    exit if interrupted # double CTRL-C to quit full program
+    interrupted = true
+  end
+
   prog = ProgressBar.create( title: prefix, format: STATUS_FORMAT, total: file.stat.size )
-  yield(lambda { prog.progress = file.tell })
-  prog.finish
+  catch(:interrupted) do
+    yield(lambda do
+      prog.progress = file.tell 
+
+      # stop processing this file if the user interrupts us
+      throw :interrupted if interrupted
+    end)
+  end
+  prog.stop
+
+  # restore previous handler
+  Signal.trap("INT", prev)
 end
 
 # Callbacks for the SAX parser
