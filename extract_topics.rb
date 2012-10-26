@@ -11,6 +11,10 @@ INPUT
 OUTPUT
   domain-topics.csv
 
+ENVIRONMENT VARIABLES
+  LIBXML2_HEADERS ~ location of the libxml2 headers root directory.  On the dev machine, they 
+                    were located at /usr/include/libxml2 but this may not be portable to your system.
+
 For the domains given in top-1m.csv, it locates all the topics affiliated for that 
 domain in content.rdf.u8 (using a SAX parser) and dumps those affiliations into a csv file.
 
