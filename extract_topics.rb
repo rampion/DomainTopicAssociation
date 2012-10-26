@@ -43,35 +43,29 @@ require 'csv'
 require 'rubygems'
 require 'nokogiri'
 require 'inline'
+require 'ruby-progressbar'
 
-CHARS = %W{ - \\ | / }
-SCALE = 1
+STATUS_FORMAT =  "%t: [%B] (%a, %E)"
 
 # simple status display
-def status(prefix=nil)
-  if prefix
-    $prefix = prefix
-    $count = 0
-    STDERR.puts
-  else
-    $count += 1
-    return unless $count % SCALE == 0
-  end
-  STDERR.print "#$prefix #{CHARS[ ($count / SCALE) % 4 ]}\r"
-  STDERR.flush
+def status(prefix, file)
+  prog = ProgressBar.create( title: prefix, format: STATUS_FORMAT, total: file.stat.size )
+  yield(lambda { prog.progress = file.tell })
+  prog.finish
 end
 
 # Callbacks for the SAX parser
 class NXSDoc < Nokogiri::XML::SAX::Document
-  def initialize
+  def initialize(update)
     @path = []
     @topics = nil
+    @update = update
   end
   def start_element(element, attributes)
     @path.push element
     case @path
     when ['RDF', 'ExternalPage']
-      status
+      @update[]
       
       domain = Hash[attributes]['about'].sub(%r!^\w+://([^"/]*)(?:/[^"]*)?$!, '\1')
       until @topics = $domain_topics[domain]
@@ -128,25 +122,30 @@ class Nokogiri::XML::SAX::ParserContext
   end
 end
 
-status "Loading top domains..."
 $domain_topics = Hash.new 
-CSV.foreach("top-1m.csv") do |row|
-  $domain_topics[row[1]] = Set.new
-  status
+CSV.open("top-1m.csv") do |csv|
+  status("Loading top domains", csv) do |update|
+    csv.each do |row|
+      $domain_topics[row[1]] = Set.new
+      update[]
+    end
+  end
 end
-STDERR.puts "\n#{$domain_topics.length} domains loaded"
+STDERR.puts "#{$domain_topics.length} domains loaded"
 
-status "Loading topics..."
-Nokogiri::XML::SAX::Parser.new(NXSDoc.new).parse( File.open("content.rdf.u8", "r:UTF-8") ) do |ctxt|
-  ctxt.recovery = 1 # turn recovery mode on
-end
-
-status "Dumping topics..."
-CSV.open("domain-topics.csv", "w:UTF-8") do |csv|
-  $domain_topics.each do |domain, topics|
-    csv << [domain, *topics.to_a]
-    status
+File.open("content.rdf.u8", "r:UTF-8")  do |file|
+  status("Loading topics", file) do |update|
+    Nokogiri::XML::SAX::Parser.new(NXSDoc.new update).parse(file) do |ctxt|
+      ctxt.recovery = 1 # turn recovery mode on
+    end
   end
 end
 
-STDERR.puts
+CSV.open("domain-topics.csv", "w:UTF-8") do |csv|
+  prog = ProgressBar.create( title: "Dumping topics", format: STATUS_FORMAT, total: $domain_topics.length )
+  $domain_topics.each do |domain, topics|
+    csv << [domain, *topics.to_a]
+    prog.increment
+  end
+  prog.finish
+end
