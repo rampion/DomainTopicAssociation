@@ -37,13 +37,17 @@ unless File.readable? 'content.rdf.u8'
   exit -1
 end
 
+require './Trie'
+
 require 'set'
+require 'cgi'
 require 'csv'
 
 require 'rubygems'
 require 'nokogiri'
 require 'inline'
 require 'ruby-progressbar'
+require 'pry'
 
 STATUS_FORMAT =  "%t: [%B] (%a, %E)"
 
@@ -76,7 +80,7 @@ end
 class NXSDoc < Nokogiri::XML::SAX::Document
   def initialize(update)
     @path = []
-    @topics = nil
+    @url = nil
     @update = update
   end
   def start_element(element, attributes)
@@ -84,27 +88,20 @@ class NXSDoc < Nokogiri::XML::SAX::Document
     case @path
     when ['RDF', 'ExternalPage']
       @update[]
-      
-      domain = Hash[attributes]['about'].sub(%r!^\w+://([^"/]*)(?:/[^"]*)?$!, '\1')
-      until @topics = $domain_topics[domain]
-        domain.sub!(/^[^.]+\./,'') or break
-      end
+      @url = CGI.unescape_html(Hash[attributes]['about'])
     when ['RDF', 'ExternalPage', 'topic' ]
-      @topic = "" if @topics
+      @topic = "" if @url
     end
   end
   def characters(content)
     @topic << content if @topic
   end
-  def getEntity
-    'foo'
-  end
   def end_element(element)
     case @path
     when ['RDF', 'ExternalPage']
-      @topics = nil
+      @url = nil
     when ['RDF', 'ExternalPage', 'topic' ]
-      @topics << @topic if @topics
+      $domain_topics.add_topic( @url, @topic ) if @url
       @topic = nil
     end
     @path.pop
@@ -140,16 +137,16 @@ class Nokogiri::XML::SAX::ParserContext
   end
 end
 
-$domain_topics = Hash.new 
+$domain_topics = PathTrie.new
 CSV.open("top-1m.csv") do |csv|
   status("Loading top domains", csv) do |update|
     csv.each do |row|
-      $domain_topics[row[1]] = Set.new
+      $domain_topics.add_url( "http://" + row[1] )
       update[]
     end
   end
 end
-STDERR.puts "#{$domain_topics.length} domains loaded"
+STDERR.puts "#{$domain_topics.size} domains loaded"
 
 File.open("content.rdf.u8", "r:UTF-8")  do |file|
   status("Loading topics", file) do |update|
@@ -158,6 +155,8 @@ File.open("content.rdf.u8", "r:UTF-8")  do |file|
     end
   end
 end
+
+binding.pry
 
 CSV.open("domain-topics.csv", "w:UTF-8") do |csv|
   prog = ProgressBar.create( title: "Dumping topics", format: STATUS_FORMAT, total: $domain_topics.length )
