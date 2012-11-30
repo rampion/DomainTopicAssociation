@@ -1,0 +1,17 @@
+grammar AlexaScrape
+  rule category
+    ("/" [^/]+)+
+  end
+  rule category_line
+    category "\n"
+  end
+  rule url
+    [^\n]*
+  end
+  rule url_line
+    [0-9]+ ". " url "\n"
+  end
+  rule file
+    (category_line url_line*)*
+  end
+end
