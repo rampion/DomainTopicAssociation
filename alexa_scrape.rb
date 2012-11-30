@@ -18,21 +18,44 @@ Connection = Net::HTTP.new 'www.alexa.com'
 def fetch path
   Nokogiri::HTML(Connection.get(path).body.force_encoding('UTF-8'))
 end
-def search cat
+def search cat, filter
   STDERR.print cat
-  puts cat
 
   doc = fetch cat
-  count = doc.css(PAGES).map do |a| 
-    fetch a[:href]
-  end.unshift(doc).flat_map do |page|
-    page.css(SITES).map { |span| span.text }
-  end.each_with_index do |url, index|
-    puts "#{index}. #{url}"
-  end.length
+
+  count = unless filter
+    puts cat
+    doc.css(PAGES).map do |a| 
+      fetch a[:href]
+    end.unshift(doc).flat_map do |page|
+      page.css(SITES).map { |span| span.text }
+    end.each_with_index do |url, index|
+      puts "#{index}. #{url}"
+    end.length
+  end
+
   STDERR.puts "\t#{count}"
 
-  doc.css(SUBS).each { |a| search a[:href] }
+  doc.css(SUBS).each do |a| 
+    sub = a[:href]
+
+    unless filter
+      search( sub, false )
+    else
+      next unless RESTART_AT.start_with? sub
+      case RESTART_AT[sub.length]
+      when nil
+        search( sub, false )
+      when '/'
+        search( sub, true )
+      else 
+        next
+      end
+      filter = false
+    end
+  end
 end
 
-search(ARGV[0] || "/topsites/category")
+
+RESTART_AT = ARGV[0]
+search("/topsites/category", RESTART_AT )
