@@ -1,7 +1,6 @@
 require 'rubygems'
 require 'addressable/uri'
 
-
 class PathTrie
   TrieNode = Struct.new( :url, :value, :children )
   attr_reader :size

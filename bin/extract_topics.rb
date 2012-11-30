@@ -18,30 +18,33 @@ unless File.readable? DMOZ_TOPICS_RDF
   exit -1
 end
 
+include FileStatus
 $domain_topics = PathTrie.new
-CSV.open("top-1m.csv") do |csv|
-  status("Loading top domains", file: csv) do |update|
+
+
+CSV.open(ALEXA_DOMAINS_CSV) do |csv|
+  status("Loading top domains", file: csv) do |update_status|
     csv.each do |row|
       $domain_topics.add_url( "http://" + row[1] )
-      update[]
+      update_status[]
     end
   end
 end
-STDERR.puts "#{$domain_topics.size} domains loaded"
 
-File.open("content.rdf.u8", "r:UTF-8")  do |file|
-  status("Loading topics", file: file) do |update|
+File.open(DMOZ_TOPICS_RDF, "r:UTF-8")  do |file|
+  status("Loading topics", file: file) do |update_status|
     SaxCallbacks.parse( file ) do |url, topic|
       $domain_topics.add_topic( url, topic ) if @url
+      update_status[]
     end
   end
 end
 
 CSV.open("domain-topics.csv", "w:UTF-8") do |csv|
-  status("Dumping topics", total: $domain_topics.length) do |update|
+  status("Dumping topics", total: $domain_topics.domain_count) do |update_status|
     $domain_topics.each do |domain, topics|
       csv << [domain, *topics.to_a]
-      update[]
+      update_status[]
     end
   end
 end
