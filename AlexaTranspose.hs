@@ -6,16 +6,20 @@
 module Main where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
-import Control.Monad.Identity (runIdentity, forM_)
+import Control.Monad (forM_, (>>), return)
+import Control.Monad.Trans (lift)
+import Data.ByteString.Lazy.Char8 (readFile, count)
 import Data.HashMap (empty, insertWith, assocs, Map)
 import Data.Hashable (Hashable)
 import Data.List (foldl')
 import Data.Text (unpack, pack, Text)
+import Prelude (show, Show, ($), (.), (++), div, (*), (-), Char, Int, replicate, Eq, Ord, concat, read, length, map, const, flip, Either(..), fromIntegral)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.IO (putStrLn, readFile)
-import Text.Parsec (char, eof, many, many1, noneOf, digit, string, runParsecT, getParserState, parse, Consumed(..), Reply(..), SourceName)
-import Text.Parsec.String (Parser)
+import System.IO (putStrLn, hPutStr, hPutStrLn, stderr, IO)
+import Text.Parsec (char, eof, many, many1, noneOf, digit, string, ParsecT, Stream, runParserT)
+import Text.Parsec.Prim (modifyState, getState, getPosition)
+import Text.Parsec.Pos (sourceLine)
 
 newtype Url = Url { fromUrl :: Text } deriving (Eq, Ord, Hashable)
 newtype Category = Category { fromCategory :: Text } deriving (Eq, Ord)
@@ -31,7 +35,7 @@ instance Show RelativeRank where
   show (RelativeRank index total) = "(" ++ show index ++ "/" ++ show total ++ ")"
 
 -- a category is a `/` delimited path on a line alone
-category :: Parser Category
+category :: Stream s m Char => ParsecT s u m Category
 category = do
   let section = (:) <$> char '/' <*> many1 (noneOf "/\n") 
   cat <- many1 section
@@ -39,7 +43,7 @@ category = do
   return . Category . pack . concat $ cat
 
 -- the urls for each category are given as "RANK. URL\n"
-rankedUrl :: Parser (Int -> (Url, RelativeRank))
+rankedUrl :: Stream s m Char => ParsecT s u m (Int -> (Url, RelativeRank))
 rankedUrl = do
   index <- many1 digit
   string ". "
@@ -48,43 +52,48 @@ rankedUrl = do
   return $ (Url $ pack url,) . RelativeRank (read index)
 
 -- a full listing including the category and its ranked list of urls 
-categoryListing :: Parser (Category, [(Url, RelativeRank)])
+categoryListing :: Stream s m Char => ParsecT s u m (Category, [(Url, RelativeRank)])
 categoryListing = do
   cat <- category
   pairs <- many rankedUrl
   let tot = length pairs
   return $ (cat,  map ($ tot) pairs)
 
--- parses an entire string (lazily) as multiple copies of the given parser
--- warning: uses `error` on parse error
-parseAsMany :: Parser a -> SourceName -> String -> [a]
-parseAsMany parser inputFile contents = loop initialState
-  where Right initialState = parse getParserState inputFile contents
-        loop state = case unconsume $ runParsecT parser' state of
-                        Error err             -> error $ show err
-                        Ok Nothing _ _        -> []
-                        Ok (Just a) state' _  -> a : loop state'
-        unconsume v = runIdentity $ case runIdentity v of 
-                                      Consumed ma -> ma
-                                      Empty ma -> ma
-        parser' = (Just <$> parser) <|> (const Nothing <$> eof)
+transposeCategoryListing :: Stream s m Char => ParsecT s (Map Url [(Category,RelativeRank)]) m ()
+transposeCategoryListing = do
+  (cat, pairs) <- categoryListing
+  let include !m (url,rank) = let pair = (cat,rank) in insertWith (const (pair:)) url [pair] m
+  modifyState $ foldl' include `flip` pairs
 
--- transpose a 2-dimensional associative list-of-lists
-transpose :: (Ord b, Hashable b) => [(a, [(b, c)])] -> [(b, [(a, c)])]
-transpose = assocs . foldl' f empty 
-  where f :: (Ord b, Hashable b) => Map b [(a,c)] -> (a,[(b,c)]) -> Map b [(a,c)]
-        f !m (a, bcs) = foldl' (g a) m bcs
-        g :: (Ord b, Hashable b) => a -> Map b [(a,c)] -> (b,c) -> Map b [(a,c)]
-        g a !m (b,c)  = let ac = (a,c) in insertWith (const (ac:)) b [ac] m
-
-display :: (Show a, Show b, Show c) => [(a, [(b,c)])] -> IO ()
-display xs = forM_ xs $ \(url, ys) -> do
-  putStrLn $ show url
-  forM_ ys $ \(cat, rank) -> 
-    putStrLn $ show rank ++ " " ++ show cat
-
+printProgress :: Stream s IO Char => Int -> ParsecT s u IO ()
+printProgress numLines = do
+  lineNo <- sourceLine <$> getPosition
+  let perc = (100 * lineNo) `div` numLines
+  let spac = 100 - perc
+  let bar = "[" ++ replicate perc '*' ++ replicate (100-perc) ' ' ++ "]"
+  let stat = show lineNo ++ "/" ++ show numLines
+  lift . hPutStr stderr $ "\r" ++ bar ++ " " ++ stat
+  
+loadTranspose :: (Stream s IO Char) => Int -> ParsecT s (Map Url [(Category,RelativeRank)]) IO [(Url,[(Category,RelativeRank)])]
+loadTranspose numLines = do
+  printProgress numLines
+  many1 $ transposeCategoryListing >> printProgress numLines
+  eof
+  assocs <$> getState
+  
 main :: IO ()
 main = do
   [inputFile] <- getArgs
   contents <- readFile inputFile
-  display . transpose $ parseAsMany categoryListing inputFile contents 
+  let numLines = fromIntegral $  count '\n' contents
+  result <- runParserT (loadTranspose numLines) empty inputFile contents
+  hPutStr stderr "\n"
+  case result of
+    Left err -> do
+      hPutStrLn stderr $ "Error: " ++ show err
+      exitFailure
+    Right xs -> do
+      forM_ xs $ \(url, ys) -> do
+        putStrLn $ show url
+        forM_ ys $ \(cat, rank) -> 
+          putStrLn $ show rank ++ " " ++ show cat
